@@ -1,0 +1,183 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String   @id @default(uuid())
+  phoneNumber     String   @unique
+  createdAt       DateTime @default(now())
+
+  profile         EmergencyProfile?
+  requests        EmergencyRequest[]
+}
+
+model EmergencyProfile {
+  id                String  @id @default(uuid())
+  userId            String  @unique
+  bloodGroup        String?
+  allergies         String?
+  conditions        String?
+  age               Int?
+  gender            String?
+  medications       String?
+  insuranceProvider String?
+  contacts          Json?   // [{name, phone}]
+
+  user        User @relation(fields: [userId], references: [id])
+}
+
+model EmergencyRequest {
+  id              String   @id @default(uuid())
+  userId          String
+  latitude        Float
+  longitude       Float
+  emergencyType   String?  // accident, cardiac, etc
+  status          RequestStatus @default(PENDING)
+
+  assignedTripId  String?
+  createdAt       DateTime @default(now())
+
+  user            User @relation(fields: [userId], references: [id])
+  dispatches      Dispatch[]
+  trip            Trip?
+}
+
+enum RequestStatus {
+  PENDING
+  SEARCHING
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model Dispatch {
+  id              String   @id @default(uuid())
+  requestId       String
+  ambulanceId     String
+
+  status          DispatchStatus
+  etaMinutes      Int?
+  distanceKm      Float?
+
+  respondedAt     DateTime?
+  createdAt       DateTime @default(now())
+
+  request         EmergencyRequest @relation(fields: [requestId], references: [id])
+  ambulance       Ambulance @relation(fields: [ambulanceId], references: [id])
+}
+
+enum DispatchStatus {
+  PINGED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+model Provider {
+  id        String @id @default(uuid())
+  name      String
+  type      String // private, hospital, govt
+
+  ambulances Ambulance[]
+}
+
+model Ambulance {
+  id            String   @id @default(uuid())
+  providerId    String
+  type          AmbulanceType
+  isAvailable   Boolean  @default(true)
+
+  latitude      Float
+  longitude     Float
+  lastUpdatedAt DateTime @default(now())
+
+  driverId      String?  @unique
+
+  provider      Provider @relation(fields: [providerId], references: [id])
+  driver        Driver?  @relation(fields: [driverId], references: [id])
+  dispatches    Dispatch[]
+}
+
+model Driver {
+  id            String @id @default(uuid())
+  name          String
+  phoneNumber   String
+
+  rating        Float?
+  isActive      Boolean @default(true)
+
+  ambulance     Ambulance?
+}
+
+enum AmbulanceType {
+  BASIC
+  ALS
+  ICU
+  OXYGEN
+}
+
+model Hospital {
+  id          String @id @default(uuid())
+  name        String
+  latitude    Float
+  longitude   Float
+
+  capacities  HospitalCapacity[]
+}
+
+model HospitalCapacity {
+  id            String @id @default(uuid())
+  hospitalId    String
+
+  icuBeds       Int
+  generalBeds   Int
+  oxygenBeds    Int
+
+  lastUpdatedAt DateTime @default(now())
+
+  hospital      Hospital @relation(fields: [hospitalId], references: [id])
+}
+
+model Trip {
+  id              String   @id @default(uuid())
+  requestId       String   @unique
+  ambulanceId     String
+  driverId        String
+
+  startTime       DateTime?
+  endTime         DateTime?
+
+  pickupLat       Float
+  pickupLng       Float
+  dropLat         Float?
+  dropLng         Float?
+
+  status          TripStatus
+
+  request         EmergencyRequest @relation(fields: [requestId], references: [id])
+}
+
+enum TripStatus {
+  EN_ROUTE
+  ARRIVED
+  PATIENT_PICKED
+  COMPLETED
+}
+
+model LocationLog {
+  id            String   @id @default(uuid())
+  ambulanceId   String
+
+  latitude      Float
+  longitude     Float
+  speed         Float?
+
+  timestamp     DateTime @default(now())
+}
