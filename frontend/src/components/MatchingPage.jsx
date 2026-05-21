@@ -43,11 +43,12 @@ export default function MatchingPage({ userLat, userLon, problem, onSelectProble
       attributionControl: false
     });
 
-    const tileUrl = theme === 'light'
-      ? "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-      : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+    const tileUrl = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 
-    L.tileLayer(tileUrl, { maxZoom: 20 }).addTo(map);
+    L.tileLayer(tileUrl, { 
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
 
     // Custom user icon (emoji 📍)
     const userIcon = L.divIcon({
@@ -117,7 +118,7 @@ export default function MatchingPage({ userLat, userLon, problem, onSelectProble
   };
 
   return (
-    <div className="map-screen animate-in">
+    <div className={`map-screen animate-in ${theme === 'dark' ? 'leaflet-dark-mode' : ''}`}>
       <div className="map-top">
         {userLat && userLon ? (
           <div ref={mapContainerRef} style={{ height: '100%', width: '100%', borderRadius: 'inherit' }} />

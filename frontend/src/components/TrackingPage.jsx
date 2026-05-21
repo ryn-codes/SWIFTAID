@@ -84,11 +84,12 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
     });
     mapRef.current = map;
 
-    const tileUrl = theme === 'light'
-      ? "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-      : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+    const tileUrl = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 
-    L.tileLayer(tileUrl, { maxZoom: 20 }).addTo(map);
+    L.tileLayer(tileUrl, { 
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
 
     const userIcon = L.divIcon({
       html: `<div style="font-size: 26px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); display: flex; align-items: center; justify-content: center;">📍</div>`,
@@ -156,18 +157,7 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
     };
   }, [userLat, userLon, dispatchData]);
 
-  // Update tilelayer dynamically on theme change
-  useEffect(() => {
-    if (!mapRef.current) return;
-    mapRef.current.eachLayer(layer => {
-      if (layer instanceof L.TileLayer) {
-        const nextUrl = theme === 'light'
-          ? "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-          : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
-        layer.setUrl(nextUrl);
-      }
-    });
-  }, [theme]);
+  // Theme changes are handled via CSS filter wrapper class leaflet-dark-mode
 
   // Update ambulance marker & polyline path reactively on coordinates updates
   useEffect(() => {
@@ -776,7 +766,7 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
 
   // RENDER NORMAL UI
   return (
-    <div className="map-screen animate-in">
+    <div className={`map-screen animate-in ${theme === 'dark' ? 'leaflet-dark-mode' : ''}`}>
       <div className="map-top">
         <div ref={mapContainerRef} style={{ height: '100%', width: '100%', borderRadius: 'inherit' }} />
       </div>

@@ -249,3 +249,12 @@
 }
 
 .call-circle:active { transform: scale(0.92); }
+
+/* Leaflet dark theme override via CSS filter on tiles */
+.leaflet-dark-mode .leaflet-tile {
+  filter: invert(100%) hue-rotate(180deg) brightness(85%) contrast(90%);
+}
+/* Ensure the container background color matches the dark mode style when tiles load */
+.leaflet-dark-mode .leaflet-container {
+  background: #111827 !important; /* matches dark mode bg */
+}
