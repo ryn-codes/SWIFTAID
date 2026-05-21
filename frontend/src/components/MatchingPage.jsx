@@ -1,17 +1,7 @@
-import { useState, useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Circle } from 'react-leaflet';
+import { useState, useEffect, useRef } from 'react';
+import { Loader2 } from 'lucide-react';
 import L from 'leaflet';
-import { Loader2, Ambulance } from 'lucide-react';
-
-const ambIcon = new L.Icon({
-  iconUrl: 'https://cdn-icons-png.flaticon.com/512/883/883344.png',
-  iconSize: [28, 28], iconAnchor: [14, 14],
-});
-
-const userIcon = new L.Icon({
-  iconUrl: 'https://cdn-icons-png.flaticon.com/512/684/684908.png',
-  iconSize: [36, 36], iconAnchor: [18, 36],
-});
+import 'leaflet/dist/leaflet.css';
 
 const EMERGENCIES = [
   { id: 'accident',    icon: '🩸', label: 'Accident / Trauma' },
@@ -25,6 +15,8 @@ const EMERGENCIES = [
 export default function MatchingPage({ userLat, userLon, problem, onSelectProblem, setProblem, theme }) {
   const [nearby, setNearby] = useState([]);
   const [selected, setSelected] = useState(null);
+  
+  const mapContainerRef = useRef(null);
 
   useEffect(() => {
     fetch('http://localhost:3000/api/ambulances')
@@ -40,6 +32,81 @@ export default function MatchingPage({ userLat, userLon, problem, onSelectProble
     }
   }, [problem]);
 
+  useEffect(() => {
+    if (!mapContainerRef.current || !userLat || !userLon) return;
+
+    // Create Leaflet map
+    const map = L.map(mapContainerRef.current, {
+      center: [userLat, userLon],
+      zoom: 13,
+      zoomControl: false,
+      attributionControl: false
+    });
+
+    const tileUrl = theme === 'light'
+      ? "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+      : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+
+    L.tileLayer(tileUrl, { maxZoom: 20 }).addTo(map);
+
+    // Custom user icon (emoji 📍)
+    const userIcon = L.divIcon({
+      html: `<div style="font-size: 26px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); display: flex; align-items: center; justify-content: center;">📍</div>`,
+      className: 'leaflet-user-marker',
+      iconSize: [30, 30],
+      iconAnchor: [15, 30]
+    });
+
+    const uMarker = L.marker([userLat, userLon], { icon: userIcon }).addTo(map);
+    uMarker.bindPopup("You are here");
+
+    // Search circle zone around the user
+    const searchCircle = L.circle([userLat, userLon], {
+      color: '#ef4444',
+      weight: 1.5,
+      opacity: 0.8,
+      fillColor: '#ef4444',
+      fillOpacity: 0.07,
+      radius: 2500
+    }).addTo(map);
+
+    // Bounds bounds array
+    const bounds = L.latLngBounds([userLat, userLon]);
+
+    // Ambulance markers
+    const ambulanceIcon = L.divIcon({
+      html: `<div style="font-size: 24px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); display: flex; align-items: center; justify-content: center;">🚑</div>`,
+      className: 'leaflet-amb-marker',
+      iconSize: [28, 28],
+      iconAnchor: [14, 14]
+    });
+
+    const ambulanceMarkers = [];
+    nearby.forEach(a => {
+      const pos = [a.latitude, a.longitude];
+      bounds.extend(pos);
+
+      const marker = L.marker(pos, { icon: ambulanceIcon }).addTo(map);
+      marker.bindPopup(`<strong>${a.providerName}</strong><br/>Driver: ${a.driverName}`);
+      ambulanceMarkers.push(marker);
+    });
+
+    // Fit bounds to show user + nearby units
+    if (nearby.length > 0) {
+      map.fitBounds(bounds, { padding: [40, 40] });
+    }
+
+    // Force Leaflet recalculation after render to prevent empty tiles
+    const resizeTimeout = setTimeout(() => {
+      map.invalidateSize();
+    }, 100);
+
+    return () => {
+      clearTimeout(resizeTimeout);
+      map.remove();
+    };
+  }, [userLat, userLon, nearby, theme]);
+
   const handleSelect = (e) => {
     setSelected(e);
     if (onSelectProblem) {
@@ -53,34 +120,7 @@ export default function MatchingPage({ userLat, userLon, problem, onSelectProble
     <div className="map-screen animate-in">
       <div className="map-top">
         {userLat && userLon ? (
-          <MapContainer
-            center={[userLat, userLon]}
-            zoom={13}
-            scrollWheelZoom={false}
-            style={{ height: '100%', width: '100%' }}
-            zoomControl={false}
-          >
-            <TileLayer
-              key={theme}
-              url={theme === 'light'
-                ? "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-                : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-              }
-            />
-            <Marker position={[userLat, userLon]} icon={userIcon}>
-              <Popup>You are here</Popup>
-            </Marker>
-            <Circle
-              center={[userLat, userLon]}
-              radius={2500}
-              pathOptions={{ color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.07, weight: 1.5 }}
-            />
-            {nearby.map(a => (
-              <Marker key={a.id} position={[a.latitude, a.longitude]} icon={ambIcon}>
-                <Popup>{a.providerName}<br />{a.driverName}</Popup>
-              </Marker>
-            ))}
-          </MapContainer>
+          <div ref={mapContainerRef} style={{ height: '100%', width: '100%', borderRadius: 'inherit' }} />
         ) : (
           <div className="locating-screen">
             <div className="radar-pulse">📍</div>

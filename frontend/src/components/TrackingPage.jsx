@@ -1,24 +1,11 @@
 import { useEffect, useState, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
 import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { 
   PhoneCall, CheckCircle2, X, Star, ShieldAlert, Heart, Truck, Landmark, 
   Shield, ClipboardList, CheckSquare, Square, MessageSquare, Settings, 
   Compass, Send, Volume2, VolumeX, AlertCircle, RefreshCw 
 } from 'lucide-react';
-
-const ambIcon = new L.Icon({
-  iconUrl: 'https://cdn-icons-png.flaticon.com/512/883/883344.png',
-  iconSize: [40, 40], iconAnchor: [20, 20],
-});
-const userIcon = new L.Icon({
-  iconUrl: 'https://cdn-icons-png.flaticon.com/512/684/684908.png',
-  iconSize: [36, 36], iconAnchor: [18, 36],
-});
-const hospIcon = new L.Icon({
-  iconUrl: 'https://cdn-icons-png.flaticon.com/512/3063/3063822.png',
-  iconSize: [32, 32], iconAnchor: [16, 32],
-});
 
 const FIRST_AID_GUIDELINES = {
   'Accident / Trauma': [
@@ -79,6 +66,125 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
 
   const chatEndRef = useRef(null);
   const chatIvRef = useRef(null);
+
+  const mapContainerRef = useRef(null);
+  const mapRef = useRef(null);
+  const ambMarkerRef = useRef(null);
+  const polylineRef = useRef(null);
+
+  // Initialize Leaflet Map
+  useEffect(() => {
+    if (!mapContainerRef.current) return;
+
+    const map = L.map(mapContainerRef.current, {
+      center: [userLat, userLon],
+      zoom: 14,
+      zoomControl: false,
+      attributionControl: false
+    });
+    mapRef.current = map;
+
+    const tileUrl = theme === 'light'
+      ? "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+      : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+
+    L.tileLayer(tileUrl, { maxZoom: 20 }).addTo(map);
+
+    const userIcon = L.divIcon({
+      html: `<div style="font-size: 26px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); display: flex; align-items: center; justify-content: center;">📍</div>`,
+      className: 'leaflet-user-marker',
+      iconSize: [30, 30],
+      iconAnchor: [15, 30]
+    });
+    L.marker([userLat, userLon], { icon: userIcon }).addTo(map).bindPopup("Your Location");
+
+    const ambulanceIcon = L.divIcon({
+      html: `<div style="font-size: 24px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); display: flex; align-items: center; justify-content: center;">🚑</div>`,
+      className: 'leaflet-amb-marker',
+      iconSize: [28, 28],
+      iconAnchor: [14, 14]
+    });
+    const ambMarker = L.marker([ambLat, ambLon], { icon: ambulanceIcon }).addTo(map).bindPopup("Ambulance en route");
+    ambMarkerRef.current = ambMarker;
+
+    if (dispatchData.hospital) {
+      const hospIcon = L.divIcon({
+        html: `<div style="font-size: 24px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); display: flex; align-items: center; justify-content: center;">🏥</div>`,
+        className: 'leaflet-hosp-marker',
+        iconSize: [28, 28],
+        iconAnchor: [14, 14]
+      });
+      L.marker([dispatchData.hospital.latitude, dispatchData.hospital.longitude], { icon: hospIcon })
+        .addTo(map)
+        .bindPopup(`<strong>${dispatchData.hospital.name}</strong><br/>ICU Bed Reserved ✓`);
+    }
+
+    // Polyline
+    const path = [
+      [ambLat, ambLon],
+      [userLat, userLon]
+    ];
+    if (dispatchData.hospital) {
+      path.push([dispatchData.hospital.latitude, dispatchData.hospital.longitude]);
+    }
+
+    const polyline = L.polyline(path, {
+      color: '#ef4444',
+      weight: 3,
+      opacity: 0.7,
+      dashArray: '8, 8'
+    }).addTo(map);
+    polylineRef.current = polyline;
+
+    // Fit bounds initially
+    const bounds = L.latLngBounds([[userLat, userLon], [ambLat, ambLon]]);
+    if (dispatchData.hospital) {
+      bounds.extend([dispatchData.hospital.latitude, dispatchData.hospital.longitude]);
+    }
+    map.fitBounds(bounds, { padding: [40, 40] });
+
+    const resizeTimeout = setTimeout(() => {
+      map.invalidateSize();
+    }, 100);
+
+    return () => {
+      clearTimeout(resizeTimeout);
+      map.remove();
+      mapRef.current = null;
+      ambMarkerRef.current = null;
+      polylineRef.current = null;
+    };
+  }, [userLat, userLon, dispatchData]);
+
+  // Update tilelayer dynamically on theme change
+  useEffect(() => {
+    if (!mapRef.current) return;
+    mapRef.current.eachLayer(layer => {
+      if (layer instanceof L.TileLayer) {
+        const nextUrl = theme === 'light'
+          ? "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+          : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+        layer.setUrl(nextUrl);
+      }
+    });
+  }, [theme]);
+
+  // Update ambulance marker & polyline path reactively on coordinates updates
+  useEffect(() => {
+    if (mapRef.current && ambMarkerRef.current && polylineRef.current) {
+      const newLatLng = L.latLng(ambLat, ambLon);
+      ambMarkerRef.current.setLatLng(newLatLng);
+
+      const nextPath = [
+        newLatLng,
+        [userLat, userLon]
+      ];
+      if (dispatchData.hospital) {
+        nextPath.push([dispatchData.hospital.latitude, dispatchData.hospital.longitude]);
+      }
+      polylineRef.current.setLatLngs(nextPath);
+    }
+  }, [ambLat, ambLon, userLat, userLon, dispatchData.hospital]);
 
   const CHECKLIST = [
     { id: 'gate',  label: 'Unlock the front gate/door for paramedics' },
@@ -239,10 +345,7 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
     }
   };
 
-  const bounds = [[userLat, userLon], [ambStartLat, ambStartLon],
-    ...(dispatchData.hospital ? [[dispatchData.hospital.latitude, dispatchData.hospital.longitude]] : [])];
-  const routeLine = [[ambStartLat, ambStartLon], [userLat, userLon],
-    ...(dispatchData.hospital ? [[dispatchData.hospital.latitude, dispatchData.hospital.longitude]] : [])];
+
 
   const otp = dispatchData.otp || '----';
   const badge = dispatchData.ambulance.driverBadge || 'PM-0000';
@@ -675,23 +778,7 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
   return (
     <div className="map-screen animate-in">
       <div className="map-top">
-        <MapContainer bounds={bounds} boundsOptions={{ padding: [40, 40] }} scrollWheelZoom={false} style={{ height: '100%', width: '100%' }} zoomControl={false}>
-          <TileLayer
-            key={theme}
-            url={theme === 'light'
-              ? "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-              : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-            }
-          />
-          <Marker position={[userLat, userLon]} icon={userIcon}><Popup>Your Location</Popup></Marker>
-          <Marker position={[ambLat, ambLon]} icon={ambIcon}><Popup>Ambulance en route</Popup></Marker>
-          {dispatchData.hospital && (
-            <Marker position={[dispatchData.hospital.latitude, dispatchData.hospital.longitude]} icon={hospIcon}>
-              <Popup>{dispatchData.hospital.name} — ICU Bed Reserved ✓</Popup>
-            </Marker>
-          )}
-          <Polyline positions={routeLine} color="#ef4444" weight={2.5} dashArray="8 6" opacity={0.5} />
-        </MapContainer>
+        <div ref={mapContainerRef} style={{ height: '100%', width: '100%', borderRadius: 'inherit' }} />
       </div>
 
       <div className="tracking-sheet scrollable" style={{ paddingBottom: 90 }}>
