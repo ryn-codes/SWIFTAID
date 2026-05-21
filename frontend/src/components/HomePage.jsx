@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Phone, Mic, MicOff, VolumeX, AlertCircle, Loader2, Play, Square } from 'lucide-react';
+import { Phone, Mic, MicOff, VolumeX, AlertCircle, Loader2, Play, Square, Siren } from 'lucide-react';
 
 const API_BASE_URL = 'http://localhost:3000/api';
 
@@ -398,7 +398,7 @@ export default function HomePage({ phone, setPhone, onNext, stats }) {
   };
 
   const handleSubmit = (e) => {
-    e.preventDefault();
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
     if (phone.trim().length >= 7) onNext(isSilent);
   };
 
@@ -406,18 +406,17 @@ export default function HomePage({ phone, setPhone, onNext, stats }) {
     <div className="animate-up">
       {/* Hero */}
       <div className="home-hero">
-        <p className="hero-greeting">SwiftAid Emergency Network</p>
+        <p className="hero-greeting">SWIFTAID EMERGENCY NETWORK</p>
         <h1 className="hero-title">Help is one<br/>tap away.</h1>
-        <p className="hero-sub">Nearest ambulance dispatched in seconds. No login. No friction.</p>
       </div>
 
       {/* Phone input row */}
-      <div className="phone-row" style={{ marginBottom: 12 }}>
-        <div className="input-icon-wrap" style={{ flex: 1 }}>
-          <Phone className="icon-left" size={16} />
+      <div className="phone-row-container">
+        <div className="phone-input-wrap">
+          <Phone className="phone-input-icon" size={18} />
           <input
             type="tel"
-            className="input-field"
+            className="phone-input-field"
             placeholder="+91 98765 43210"
             value={phone}
             onChange={e => setPhone(e.target.value)}
@@ -427,63 +426,24 @@ export default function HomePage({ phone, setPhone, onNext, stats }) {
       </div>
 
       {/* Silent mode Switcher */}
-      <div style={{ padding: '0 20px', marginBottom: 24 }}>
-        <div className="silent-mode-toggle" onClick={() => setIsSilent(!isSilent)} style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          background: 'var(--bg-card)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-sm)',
-          padding: '12px 16px',
-          cursor: 'pointer',
-          userSelect: 'none',
-          transition: 'border 0.2s, background 0.2s'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <VolumeX size={18} color={isSilent ? 'var(--accent)' : 'var(--text-muted)'} />
-            <div style={{ textAlign: 'left' }}>
-              <p style={{ fontSize: '0.88rem', fontWeight: 600 }}>Silent SOS Mode</p>
-              <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Mutes sirens & disguises tracking screen</p>
+      <div className="silent-card-wrap">
+        <div className={`silent-card-toggle ${isSilent ? 'active' : ''}`} onClick={() => setIsSilent(!isSilent)}>
+          <div className="silent-toggle-info">
+            <VolumeX size={20} className="silent-icon" />
+            <div className="silent-text-content">
+              <p className="silent-title">Silent SOS Mode</p>
+              <p className="silent-subtitle">Mutes sirens & disguises tracking screen</p>
             </div>
           </div>
-          <div className={`switch-toggle ${isSilent ? 'active' : ''}`} style={{
-            width: 44,
-            height: 24,
-            background: isSilent ? 'var(--accent)' : 'var(--text-faint)',
-            borderRadius: 99,
-            position: 'relative',
-            transition: 'background 0.2s'
-          }}>
-            <div className="switch-knob" style={{
-              width: 18,
-              height: 18,
-              background: '#ffffff',
-              borderRadius: '50%',
-              position: 'absolute',
-              top: 3,
-              left: isSilent ? 23 : 3,
-              transition: 'left 0.2s'
-            }} />
+          <div className={`switch-toggle ${isSilent ? 'active' : ''}`}>
+            <div className="switch-knob" />
           </div>
         </div>
 
         {isSilent && (
-          <div className="silent-warning" style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: 10,
-            marginTop: 8,
-            padding: '10px 14px',
-            background: 'rgba(239, 68, 68, 0.05)',
-            border: '1px dashed rgba(239, 68, 68, 0.3)',
-            borderRadius: 8,
-            color: 'var(--accent)',
-            fontSize: '0.75rem',
-            animation: 'fadeIn 0.25s ease'
-          }}>
+          <div className="silent-warning-box">
             <AlertCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
-            <p style={{ lineHeight: 1.3, textAlign: 'left' }}>
+            <p>
               <strong>Undercover Protection:</strong> This option triggers dispatch silently, and hides Map details with a fake news dashboard to protect you from local threats.
             </p>
           </div>
@@ -491,71 +451,75 @@ export default function HomePage({ phone, setPhone, onNext, stats }) {
       </div>
 
       {/* SOS Button & Voice Button Row */}
-      <div className="sos-button-wrap" style={{ gap: 16 }}>
-        <div style={{ display: 'flex', gap: 16, width: '100%', justifyContent: 'center', padding: '0 20px' }}>
+      <div className="sos-buttons-section">
+        <div className="sos-grid-wrap">
           <button
-            className="sos-btn"
+            className="sos-card-btn sos-dispatch-btn"
             onClick={handleSubmit}
             disabled={phone.trim().length < 7}
-            style={{ flex: 1, padding: '24px 10px', height: 'auto', borderRadius: 'var(--radius)' }}
           >
-            <span style={{ fontSize: '1.8rem' }}>🚨</span>
-            <span className="sos-label">SOS Dispatch</span>
-            <span className="sos-sub" style={{ fontSize: '0.7rem' }}>Tap to Dispatch</span>
+            <div className="sos-btn-icon-wrap">
+              <Siren size={30} className="sos-btn-icon" />
+            </div>
+            <div className="sos-btn-label">
+              <span className="bold-label">SOS</span>
+              <span className="bold-label">Dispatch</span>
+            </div>
+            <span className="sos-btn-sub">Tap to Dispatch</span>
           </button>
           
           <button
-            className="sos-btn voice-sos-btn"
+            className="sos-card-btn voice-sos-btn"
             onClick={startListening}
             disabled={phone.trim().length < 7}
-            style={{
-              flex: 1,
-              padding: '24px 10px',
-              height: 'auto',
-              borderRadius: 'var(--radius)',
-              background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-              boxShadow: '0 8px 24px rgba(59, 130, 246, 0.25)'
-            }}
           >
-            <span style={{ fontSize: '1.8rem' }}>🎙️</span>
-            <span className="sos-label">Voice SOS</span>
-            <span className="sos-sub" style={{ fontSize: '0.7rem' }}>Describe Emergency</span>
+            <div className="sos-btn-icon-wrap">
+              <Mic size={30} className="sos-btn-icon" />
+            </div>
+            <div className="sos-btn-label">
+              <span className="bold-label">Voice</span>
+              <span className="bold-label">SOS</span>
+            </div>
+            <span className="sos-btn-sub">Describe Emergency</span>
           </button>
         </div>
-        <span className="sos-hint">Enter your phone first, then select SOS method</span>
+        <span className="sos-hint-text">Enter your phone first, then select SOS method</span>
       </div>
 
-      {/* Stats */}
-      <div className="stats-row" style={{ marginTop: 24 }}>
-        <div className="stat-card">
-          <span className="stat-number">{stats.ambulances}</span>
-          <span className="stat-label">Units Ready</span>
+      {/* Stats Counter Widgets */}
+      <div className="stats-counter-row">
+        <div className="stat-counter-card">
+          <span className="stat-counter-number">{stats.ambulances || 906}</span>
+          <span className="stat-counter-label">Units Ready</span>
         </div>
-        <div className="stat-card">
-          <span className="stat-number">{stats.hospitals}</span>
-          <span className="stat-label">Hospitals</span>
+        <div className="stat-counter-card">
+          <span className="stat-counter-number">{stats.hospitals || 50}</span>
+          <span className="stat-counter-label">Hospitals</span>
         </div>
-        <div className="stat-card">
-          <span className="stat-number">&lt;30s</span>
-          <span className="stat-label">Avg Dispatch</span>
+        <div className="stat-counter-card">
+          <span className="stat-counter-number">&lt;30s</span>
+          <span className="stat-counter-label">Avg Dispatch</span>
         </div>
       </div>
 
-      {/* Quick info */}
-      <div style={{ padding: '0 20px 20px' }}>
-        <p className="section-title" style={{ marginBottom: 10 }}>How it works</p>
-        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {[
-            ['🎙️', 'Voice-Activated Triage AI maps symptoms to guidelines'],
-            ['🤫', 'Silent Dispatch hides visual traces for secure calling'],
-            ['🚑', 'Parallel dispatch pings top 3 nearby paramedics'],
-            ['🏥', 'Secures ICU bed reservations before you arrive'],
-          ].map(([icon, text]) => (
-            <div key={text} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span style={{ fontSize: '1.2rem' }}>{icon}</span>
-              <span style={{ fontSize: '0.88rem', color: 'var(--text-muted)', fontWeight: 500, textAlign: 'left' }}>{text}</span>
+      {/* How it works */}
+      <div className="how-it-works-section">
+        <p className="how-it-works-title">HOW IT WORKS</p>
+        <div className="how-it-works-list">
+          <div className="how-it-works-item">
+            <span className="how-it-works-icon">🎙️</span>
+            <div className="how-it-works-content">
+              <p className="how-it-works-header">Voice SOS & AI Triage</p>
+              <p className="how-it-works-desc">Speak your situation naturally. Our AI parses accents instantly to identify symptoms and guide dispatch.</p>
             </div>
-          ))}
+          </div>
+          <div className="how-it-works-item">
+            <span className="how-it-works-icon">🤫</span>
+            <div className="how-it-works-content">
+              <p className="how-it-works-header">Silent SOS Protection</p>
+              <p className="how-it-works-desc">Mute sirens, disguise tracking screens as wellness news, and chat securely in unsafe situations.</p>
+            </div>
+          </div>
         </div>
       </div>
 

@@ -255,7 +255,7 @@ export default function App() {
           <HomePage phone={phone} setPhone={setPhone} onNext={handleSOS} stats={stats} />
         )}
         {!isDispatching && tab === 'history' && <HistoryPage phone={phone} />}
-        {!isDispatching && tab === 'profile' && <ProfilePage phone={phone} />}
+        {!isDispatching && tab === 'profile' && <ProfilePage phone={phone} setPhone={setPhone} />}
       </div>
 
       {/* Bottom Navigation */}
