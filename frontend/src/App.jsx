@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Home, Clock, User, AlertTriangle } from 'lucide-react';
+import { Home, Clock, User, AlertTriangle, Sun, Moon } from 'lucide-react';
 import './index.css';
 import './components/Map.css';
 import HomePage from './components/HomePage';
@@ -8,13 +8,22 @@ import CongratulationsPage from './components/CongratulationsPage';
 import TrackingPage from './components/TrackingPage';
 import ProfilePage from './components/ProfilePage';
 import HistoryPage from './components/HistoryPage';
+import PostCareFeedbackPage from './components/PostCareFeedbackPage';
 
 const API = 'http://localhost:3000/api';
 
 export default function App() {
   // Navigation
   const [tab, setTab] = useState('home');       // home | history | profile
-  const [dispatchStep, setDispatchStep] = useState(0); // 0=idle 1=locating 2=matching 3=tracking
+  const [dispatchStep, setDispatchStep] = useState(0); // 0=idle 1=locating 2=matching 3=congrats 4=tracking 5=post-care
+
+  // Theme support
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+
+  useEffect(() => {
+    document.documentElement.className = theme === 'light' ? 'light-theme' : '';
+    localStorage.setItem('theme', theme);
+  }, [theme]);
 
   // State
   const [phone, setPhone] = useState('');
@@ -25,6 +34,8 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState(null);
   const [stats, setStats] = useState({ ambulances: '…', hospitals: '…' });
   const [requestId, setRequestId] = useState(null);
+  const [isSilent, setIsSilent] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState(null);
   const pollRef = useRef(null);
 
   const updateRequestEmergencyType = async (typeLabel) => {
@@ -52,8 +63,13 @@ export default function App() {
   }, []);
 
   // ── Dispatch Flow ──────────────────────────────────────
-  const handleSOS = async () => {
+  const handleSOS = async (isSilentMode = false, voiceText = null, voiceCategory = null) => {
     setErrorMsg(null);
+    setIsSilent(isSilentMode);
+    setVoiceTranscript(voiceText);
+    if (voiceCategory) {
+      setProblem(voiceCategory);
+    }
     setDispatchStep(1); // locating
 
     let lat = 28.6139, lon = 77.2090;
@@ -88,7 +104,14 @@ export default function App() {
         const res = await fetch(`${API}/request-ambulance`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phoneNumber: phone, latitude: lat, longitude: lon }),
+          body: JSON.stringify({
+            phoneNumber: phone,
+            latitude: lat,
+            longitude: lon,
+            isSilent: isSilentMode,
+            voiceTranscript: voiceText,
+            emergencyType: voiceCategory || 'UNKNOWN'
+          }),
         });
         const data = await res.json();
         if (!res.ok) { setErrorMsg(data.error || 'Dispatch failed'); setDispatchStep(0); return; }
@@ -113,16 +136,26 @@ export default function App() {
         setErrorMsg('Network error. Check your connection and try again.');
         setDispatchStep(0);
       }
-    };
+  };
 
-    const resetDispatch = () => {
-      clearInterval(pollRef.current);
-      setDispatchStep(0);
-      setDispatchData(null);
-      setProblem(null);
-      setErrorMsg(null);
-      setRequestId(null);
-    };
+  const resetDispatch = () => {
+    clearInterval(pollRef.current);
+    setDispatchStep(0);
+    setDispatchData(null);
+    setProblem(null);
+    setErrorMsg(null);
+    setRequestId(null);
+    setIsSilent(false);
+    setVoiceTranscript(null);
+  };
+
+  const completeRequest = async () => {
+    if (!requestId) return;
+    try {
+      await fetch(`${API}/request/${requestId}/complete`, { method: 'PATCH' });
+    } catch { /* ignore */ }
+    setDispatchStep(5);
+  };
 
   useEffect(() => () => clearInterval(pollRef.current), []);
 
@@ -135,6 +168,7 @@ export default function App() {
     if (dispatchStep === 2) return 'Matching Unit…';
     if (dispatchStep === 3) return 'Unit Confirmed';
     if (dispatchStep === 4) return 'Help is Coming';
+    if (dispatchStep === 5) return 'Post-Incident Care';
     if (tab === 'history') return 'History';
     if (tab === 'profile') return 'Medical Profile';
     return null; // home shows hero
@@ -151,7 +185,17 @@ export default function App() {
         {headerTitle() && (
           <span style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-muted)' }}>{headerTitle()}</span>
         )}
-        <span className="header-badge">LIVE</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button 
+            onClick={() => setTheme(t => t === 'light' ? 'dark' : 'light')} 
+            className="theme-toggle-btn"
+            aria-label="Toggle theme"
+            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 6, borderRadius: '50%' }}
+          >
+            {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+          </button>
+          <span className="header-badge">LIVE</span>
+        </div>
       </header>
 
       {/* Error Banner */}
@@ -174,6 +218,7 @@ export default function App() {
             userLon={userLon} 
             problem={problem} 
             onSelectProblem={updateRequestEmergencyType} 
+            theme={theme}
           />
         )}
 
@@ -191,6 +236,17 @@ export default function App() {
             userLat={userLat} userLon={userLon}
             dispatchData={dispatchData} problem={problem}
             onReset={resetDispatch}
+            onComplete={completeRequest}
+            theme={theme}
+            isSilent={isSilent}
+            requestId={requestId}
+          />
+        )}
+
+        {dispatchStep === 5 && dispatchData && (
+          <PostCareFeedbackPage
+            dispatchData={dispatchData}
+            onDone={resetDispatch}
           />
         )}
 

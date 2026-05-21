@@ -76,6 +76,7 @@ async function main() {
               phoneNumber: getRandPhone(),
               rating: parseFloat((3.5 + Math.random() * 1.5).toFixed(1)),
               isActive: true,
+              badgeNumber: `PM-${Math.floor(1000 + Math.random() * 9000)}`
             }
           });
 

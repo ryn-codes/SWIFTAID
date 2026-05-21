@@ -22,7 +22,7 @@ const EMERGENCIES = [
   { id: 'other',       icon: '🤕', label: 'Other / Not Sure' },
 ];
 
-export default function MatchingPage({ userLat, userLon, problem, onSelectProblem, setProblem }) {
+export default function MatchingPage({ userLat, userLon, problem, onSelectProblem, setProblem, theme }) {
   const [nearby, setNearby] = useState([]);
   const [selected, setSelected] = useState(null);
 
@@ -60,7 +60,13 @@ export default function MatchingPage({ userLat, userLon, problem, onSelectProble
             style={{ height: '100%', width: '100%' }}
             zoomControl={false}
           >
-            <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />
+            <TileLayer
+              key={theme}
+              url={theme === 'light'
+                ? "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+                : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+              }
+            />
             <Marker position={[userLat, userLon]} icon={userIcon}>
               <Popup>You are here</Popup>
             </Marker>

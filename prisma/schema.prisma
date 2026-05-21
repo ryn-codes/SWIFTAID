@@ -39,6 +39,9 @@ model EmergencyRequest {
   longitude       Float
   emergencyType   String?  // accident, cardiac, etc
   status          RequestStatus @default(PENDING)
+  otp             String?
+  isSilent        Boolean  @default(false)
+  voiceTranscript String?
 
   assignedTripId  String?
   createdAt       DateTime @default(now())
@@ -46,6 +49,7 @@ model EmergencyRequest {
   user            User @relation(fields: [userId], references: [id])
   dispatches      Dispatch[]
   trip            Trip?
+  messages        ChatMessage[]
 }
 
 enum RequestStatus {
@@ -109,6 +113,7 @@ model Driver {
   id            String @id @default(uuid())
   name          String
   phoneNumber   String
+  badgeNumber   String?
 
   rating        Float?
   isActive      Boolean @default(true)
@@ -180,4 +185,14 @@ model LocationLog {
   speed         Float?
 
   timestamp     DateTime @default(now())
+}
+
+model ChatMessage {
+  id        String   @id @default(uuid())
+  requestId String
+  sender    String   // "user" | "driver"
+  message   String
+  createdAt DateTime @default(now())
+
+  request   EmergencyRequest @relation(fields: [requestId], references: [id])
 }

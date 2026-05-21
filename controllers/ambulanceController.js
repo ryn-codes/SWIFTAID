@@ -84,7 +84,7 @@ const simulateDriverResponse = async (requestId, dispatchIds) => {
 };
 
 const requestAmbulance = async (req, res) => {
-  const { phoneNumber, latitude, longitude, emergencyType } = req.body;
+  const { phoneNumber, latitude, longitude, emergencyType, isSilent, voiceTranscript } = req.body;
 
   if (!phoneNumber || !latitude || !longitude) {
     return res.status(400).json({ error: 'Phone number, latitude, and longitude required' });
@@ -98,6 +98,7 @@ const requestAmbulance = async (req, res) => {
     }
 
     // 2. Create the Request
+    const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
     const newRequest = await prisma.emergencyRequest.create({
       data: {
         userId: user.id,
@@ -105,6 +106,9 @@ const requestAmbulance = async (req, res) => {
         longitude,
         emergencyType: emergencyType || 'UNKNOWN',
         status: 'PENDING',
+        otp: otpCode,
+        isSilent: isSilent === true || isSilent === 'true',
+        voiceTranscript: voiceTranscript || null,
       },
     });
 
@@ -201,9 +205,12 @@ const getRequestStatus = async (req, res) => {
         dispatchData: {
           bookingId: request.id,
           etaMins: acceptedDispatch.etaMinutes,
+          otp: request.otp,
+          isSilent: request.isSilent,
           ambulance: {
             id: acceptedDispatch.ambulance.id,
             driverName: acceptedDispatch.ambulance.driver.name,
+            driverBadge: acceptedDispatch.ambulance.driver.badgeNumber,
             providerName: acceptedDispatch.ambulance.provider.name,
             phone: acceptedDispatch.ambulance.driver.phoneNumber,
             latitude: acceptedDispatch.ambulance.latitude,
@@ -217,7 +224,7 @@ const getRequestStatus = async (req, res) => {
       });
     }
 
-    res.json({ status: request.status });
+    res.json({ status: request.status, isSilent: request.isSilent });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -266,4 +273,219 @@ const updateEmergencyType = async (req, res) => {
   }
 };
 
-module.exports = { requestAmbulance, getAmbulances, getRequestStatus, updateEmergencyType };
+const completeEmergencyRequest = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const updatedRequest = await prisma.emergencyRequest.update({
+      where: { id },
+      data: { status: 'COMPLETED' }
+    });
+    res.json({ success: true, request: updatedRequest });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const parseVoiceTriage = async (req, res) => {
+  const { text, audio, mimeType, langHint } = req.body;
+  
+  if (audio) {
+    if (!process.env.GEMINI_API_KEY) {
+      console.error("GEMINI_API_KEY is not defined in environment variables");
+      return res.status(500).json({ error: 'Gemini API key not configured on server' });
+    }
+
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`;
+      
+      const prompt = `You are SwiftAid's emergency dispatcher. Analyze the attached audio recording of a person describing a medical emergency. 
+${langHint ? `Note: The speaker's language context is: ${langHint}.` : ''}
+First, transcribe the spoken words exactly into clear English (or romanized text if it's Hinglish/Hindi mixed dialect). If no words are spoken, transcribe as ''.
+Second, categorize the emergency into one of these types:
+- 'Cardiac Arrest' (chest pain, heart pressure, collapsing, etc.)
+- 'Breathing Difficulty' (choking, suffocation, asthma, gasping)
+- 'Accident / Trauma' (bleeding, wounds, fall, fracture, collision)
+- 'Unconscious Person' (fainting, unresponsive, behosh, passed out)
+- 'Stroke Symptoms' (slurred speech, mouth drooping, body numbness/weakness)
+- 'Other / Not Sure' (any other symptoms or unidentifiable audio)
+
+You MUST respond strictly with a JSON object in the following schema (no markdown formatting, no surrounding backticks, no text other than the JSON):
+{
+  "transcript": "exact transcription",
+  "emergencyType": "one of the emergency types listed above"
+}`;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType: mimeType || 'audio/webm',
+                  data: audio
+                }
+              }
+            ]
+          }],
+          generationConfig: {
+            responseMimeType: "application/json"
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Gemini API error response:", errorText);
+        throw new Error(`Gemini API returned status ${response.status}`);
+      }
+
+      const result = await response.json();
+      const textResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!textResponse) {
+        throw new Error("Empty response from Gemini API");
+      }
+
+      const parsed = JSON.parse(textResponse);
+      return res.json({
+        transcript: parsed.transcript || '',
+        emergencyType: parsed.emergencyType || 'Other / Not Sure'
+      });
+
+    } catch (err) {
+      console.error("Gemini audio transcription failed:", err);
+      return res.status(500).json({ error: 'Failed to transcribe audio via Gemini API' });
+    }
+  }
+
+  if (!text) return res.status(400).json({ error: 'Text transcript or audio payload required' });
+  
+  const transcript = text.toLowerCase();
+  let emergencyType = 'Other / Not Sure';
+  
+  // Cardiac Arrest Keywords
+  const cardiacKeywords = [
+    'chest', 'heart', 'cardiac', 'cpr', 'attack', 'pressure', 'heavy', 'tightness',
+    'chhaati', 'dil', 'dard', 'pain', 'colapse', 'pulse'
+  ];
+  
+  // Breathing Difficulty Keywords
+  const breathingKeywords = [
+    'breath', 'chok', 'suffocat', 'asthma', 'wheez', 'gasp', 'throat', 'airway',
+    'saans', 'dama', 'cough', 'choke'
+  ];
+  
+  // Accident / Trauma Keywords
+  const traumaKeywords = [
+    'bleed', 'blood', 'accident', 'fall', 'fracture', 'cut', 'wound', 'injury',
+    'collision', 'hurt', 'crash', 'hit', 'khoon', 'chot', 'dard', 'haath', 'pair'
+  ];
+  
+  // Unconscious Person Keywords
+  const unconsciousKeywords = [
+    'faint', 'unconscious', 'pass out', 'passed out', 'response', 'behosh', 'gira',
+    'collaps', 'sleep', 'wake', 'dizzy', 'headache'
+  ];
+  
+  // Stroke Symptoms Keywords
+  const strokeKeywords = [
+    'stroke', 'paraly', 'slur', 'speech', 'mouth', 'numb', 'weakness', 'slurred',
+    'face', 'arm', 'leg', 'balance', 'vision'
+  ];
+
+  const matchesAny = (words) => words.some(w => transcript.includes(w));
+
+  if (matchesAny(cardiacKeywords)) {
+    emergencyType = 'Cardiac Arrest';
+  } else if (matchesAny(breathingKeywords)) {
+    emergencyType = 'Breathing Difficulty';
+  } else if (matchesAny(traumaKeywords)) {
+    emergencyType = 'Accident / Trauma';
+  } else if (matchesAny(unconsciousKeywords)) {
+    emergencyType = 'Unconscious Person';
+  } else if (matchesAny(strokeKeywords)) {
+    emergencyType = 'Stroke Symptoms';
+  }
+  
+  res.json({ transcript: text, emergencyType });
+};
+
+const sendChatMessage = async (req, res) => {
+  const { id } = req.params;
+  const { sender, message } = req.body;
+  if (!sender || !message) return res.status(400).json({ error: 'Sender and message required' });
+  
+  try {
+    const chat = await prisma.chatMessage.create({
+      data: {
+        requestId: id,
+        sender,
+        message
+      }
+    });
+    
+    // Simulate driver response if user sent a message
+    if (sender === 'user') {
+      setTimeout(async () => {
+        try {
+          let responseMessage = "Understood. Paramedics are en route.";
+          const msgLower = message.toLowerCase();
+          if (msgLower.includes('silent') || msgLower.includes('siren') || msgLower.includes('horn') || msgLower.includes('sound')) {
+            responseMessage = "Copy that. Sirens and horns turned off. Approaching silently.";
+          } else if (msgLower.includes('door') || msgLower.includes('gate') || msgLower.includes('open') || msgLower.includes('key')) {
+            responseMessage = "Acknowledged, we will enter directly. Keep safe.";
+          } else if (msgLower.includes('bathroom') || msgLower.includes('bedroom') || msgLower.includes('floor') || msgLower.includes('bed')) {
+            responseMessage = "Copy that. Bringing the stretcher directly to you.";
+          } else if (msgLower.includes('fast') || msgLower.includes('hurry') || msgLower.includes('quick')) {
+            responseMessage = "Driving as fast as possible. Hang in there.";
+          }
+          
+          await prisma.chatMessage.create({
+            data: {
+              requestId: id,
+              sender: 'driver',
+              message: responseMessage
+            }
+          });
+        } catch (err) {
+          console.error("Mocked chat response error:", err);
+        }
+      }, 2500);
+    }
+    
+    res.json({ success: true, chat });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const getChatMessages = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const messages = await prisma.chatMessage.findMany({
+      where: { requestId: id },
+      orderBy: { createdAt: 'asc' }
+    });
+    res.json(messages);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+module.exports = { 
+  requestAmbulance, 
+  getAmbulances, 
+  getRequestStatus, 
+  updateEmergencyType, 
+  completeEmergencyRequest,
+  parseVoiceTriage,
+  sendChatMessage,
+  getChatMessages
+};
