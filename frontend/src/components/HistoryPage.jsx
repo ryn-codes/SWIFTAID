@@ -95,6 +95,12 @@ export default function HistoryPage({ phone }) {
                 </p>
                 <ChevronRight size={16} color="var(--text-faint)" />
               </div>
+              {item.pickupAddress && (
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span>📍</span>
+                  <span>{item.pickupAddress}</span>
+                </p>
+              )}
             </div>
           ))}
         </div>
@@ -135,6 +141,18 @@ export default function HistoryPage({ phone }) {
                   <div>
                     <p className="meta-lbl">TIME</p>
                     <p className="meta-val">{fmtTime(selectedIncident.createdAt)}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Pickup Location Details */}
+              <div className="details-group">
+                <h4 className="group-title">📍 Pickup Location</h4>
+                <div className="details-list">
+                  <div className="details-row">
+                    <span className="details-val" style={{ textAlign: 'left', color: 'var(--text)', fontSize: '0.82rem', lineHeight: 1.4 }}>
+                      {selectedIncident.pickupAddress || 'GPS Coordinates Acquired'}
+                    </span>
                   </div>
                 </div>
               </div>

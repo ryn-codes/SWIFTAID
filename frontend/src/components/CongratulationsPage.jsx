@@ -40,6 +40,12 @@ export default function CongratulationsPage({ dispatchData, problem, onSelectPro
           <span className="bullet-sep">•</span>
           <span className="hospital-reserve-status">ICU Bed Secured at {dispatchData.hospital?.name || 'Nearest ICU Hospital'}</span>
         </div>
+        {dispatchData.pickupAddress && (
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>📍</span>
+            <span style={{ textAlign: 'left', lineHeight: 1.3 }}>Pickup: {dispatchData.pickupAddress}</span>
+          </div>
+        )}
       </div>
 
       {/* UX Nudge Section */}

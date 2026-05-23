@@ -124,7 +124,7 @@ export default function App() {
             const sr = await fetch(`${API}/request-status/${data.requestId}`);
             if (sr.ok) {
               const sd = await sr.json();
-              if (sd.status === 'ASSIGNED') {
+              if (sd.status === 'ASSIGNED' || sd.status === 'IN_PROGRESS') {
                 clearInterval(pollRef.current);
                 setDispatchData(sd.dispatchData);
                 setDispatchStep(3); // congratulations screen

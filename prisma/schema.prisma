@@ -42,6 +42,7 @@ model EmergencyRequest {
   otp             String?
   isSilent        Boolean  @default(false)
   voiceTranscript String?
+  pickupAddress   String?
 
   assignedTripId  String?
   createdAt       DateTime @default(now())

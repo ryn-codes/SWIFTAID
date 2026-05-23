@@ -40,6 +40,43 @@ const FIRST_AID_GUIDELINES = {
   ]
 };
 
+const interpolatePath = (path, fraction) => {
+  if (!path || path.length === 0) return null;
+  if (path.length === 1) return [...path[0], 0];
+  if (fraction <= 0) return [...path[0], 0];
+  if (fraction >= 1) return [...path[path.length - 1], path.length - 2];
+
+  const segmentLengths = [];
+  let totalLength = 0;
+  for (let i = 0; i < path.length - 1; i++) {
+    const p1 = path[i];
+    const p2 = path[i + 1];
+    const len = Math.sqrt(Math.pow(p2[0] - p1[0], 2) + Math.pow(p2[1] - p1[1], 2));
+    segmentLengths.push(len);
+    totalLength += len;
+  }
+
+  if (totalLength === 0) return [...path[0], 0];
+
+  const targetLength = fraction * totalLength;
+  let cumulativeLength = 0;
+
+  for (let i = 0; i < path.length - 1; i++) {
+    const len = segmentLengths[i];
+    if (cumulativeLength + len >= targetLength) {
+      const segFraction = (targetLength - cumulativeLength) / len;
+      const p1 = path[i];
+      const p2 = path[i + 1];
+      const lat = p1[0] + segFraction * (p2[0] - p1[0]);
+      const lon = p1[1] + segFraction * (p2[1] - p1[1]);
+      return [lat, lon, i];
+    }
+    cumulativeLength += len;
+  }
+
+  return [...path[path.length - 1], path.length - 2];
+};
+
 export default function TrackingPage({ userLat, userLon, dispatchData, problem, onReset, onComplete, theme, isSilent: initialIsSilent, requestId }) {
   const isSilent = initialIsSilent || dispatchData?.isSilent;
   const ambStartLat = dispatchData.ambulance.latitude;
@@ -50,6 +87,12 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
   const [arrived, setArrived] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [completedTriggered, setCompletedTriggered] = useState(false);
+
+  // Split-phase states
+  const [tripPhase, setTripPhase] = useState('pickup'); // 'pickup' | 'hospital'
+  const [otpInput, setOtpInput] = useState('');
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
+  const [otpError, setOtpError] = useState('');
   
   // Custom states for V2 features
   const [disguiseOverridden, setDisguiseOverridden] = useState(false);
@@ -71,6 +114,126 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
   const mapRef = useRef(null);
   const ambMarkerRef = useRef(null);
   const polylineRef = useRef(null);
+
+  const getFallbackCoords = () => {
+    const path = [
+      [ambStartLat, ambStartLon],
+      [userLat, userLon]
+    ];
+    if (dispatchData.hospital) {
+      path.push([dispatchData.hospital.latitude, dispatchData.hospital.longitude]);
+    }
+    return path;
+  };
+
+  const [routeCoords, setRouteCoords] = useState(getFallbackCoords);
+  const [currentRouteIndex, setCurrentRouteIndex] = useState(0);
+
+  // Fetch real-world route from OSRM depending on the trip leg
+  useEffect(() => {
+    const fetchRoute = async () => {
+      try {
+        let url = '';
+        if (tripPhase === 'pickup') {
+          url = `https://router.project-osrm.org/route/v1/driving/${ambStartLon},${ambStartLat};${userLon},${userLat}`;
+        } else if (dispatchData.hospital) {
+          url = `https://router.project-osrm.org/route/v1/driving/${userLon},${userLat};${dispatchData.hospital.longitude},${dispatchData.hospital.latitude}`;
+        } else {
+          setRouteCoords([[userLat, userLon], [userLat, userLon]]);
+          setEta(1);
+          return;
+        }
+        url += `?geometries=geojson&overview=full`;
+        
+        const response = await fetch(url);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.routes && data.routes[0]) {
+            const route = data.routes[0];
+            const coords = route.geometry.coordinates.map(c => [c[1], c[0]]);
+            setRouteCoords(coords);
+            if (route.duration) {
+              setEta(Math.max(1, Math.round(route.duration / 60)));
+            }
+          } else {
+            setRouteCoords(
+              tripPhase === 'pickup'
+                ? [[ambStartLat, ambStartLon], [userLat, userLon]]
+                : (dispatchData.hospital 
+                    ? [[userLat, userLon], [dispatchData.hospital.latitude, dispatchData.hospital.longitude]]
+                    : [[userLat, userLon], [userLat, userLon]])
+            );
+          }
+        } else {
+          setRouteCoords(
+            tripPhase === 'pickup'
+              ? [[ambStartLat, ambStartLon], [userLat, userLon]]
+              : (dispatchData.hospital 
+                  ? [[userLat, userLon], [dispatchData.hospital.latitude, dispatchData.hospital.longitude]]
+                  : [[userLat, userLon], [userLat, userLon]])
+          );
+        }
+      } catch (err) {
+        console.error("OSRM Route fetch failed:", err);
+        setRouteCoords(
+          tripPhase === 'pickup'
+            ? [[ambStartLat, ambStartLon], [userLat, userLon]]
+            : (dispatchData.hospital 
+                ? [[userLat, userLon], [dispatchData.hospital.latitude, dispatchData.hospital.longitude]]
+                : [[userLat, userLon], [userLat, userLon]])
+        );
+      }
+    };
+    fetchRoute();
+  }, [tripPhase, ambStartLat, ambStartLon, userLat, userLon, dispatchData.hospital]);
+
+  // Initial and periodic polling for request status changes
+  useEffect(() => {
+    if (!requestId) return;
+
+    const checkStatus = async () => {
+      try {
+        const response = await fetch(`http://localhost:3000/api/request-status/${requestId}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.status === 'IN_PROGRESS' && tripPhase !== 'hospital') {
+            setTripPhase('hospital');
+          }
+        }
+      } catch (err) {
+        console.error("Status polling failed:", err);
+      }
+    };
+
+    checkStatus();
+    const interval = setInterval(checkStatus, 2000);
+    return () => clearInterval(interval);
+  }, [requestId, tripPhase]);
+
+  // Verify OTP handler
+  const handleVerifyOtp = async (inputCode) => {
+    if (!inputCode) return;
+    setVerifyingOtp(true);
+    setOtpError('');
+    try {
+      const response = await fetch(`http://localhost:3000/api/request/${requestId}/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ otp: inputCode })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setTripPhase('hospital');
+      } else {
+        setOtpError(data.error || 'Verification failed');
+      }
+    } catch (err) {
+      console.error("OTP verification error:", err);
+      setOtpError('Network error. Please try again.');
+    } finally {
+      setVerifyingOtp(false);
+    }
+  };
 
   // Initialize Leaflet Map
   useEffect(() => {
@@ -120,16 +283,7 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
         .bindPopup(`<strong>${dispatchData.hospital.name}</strong><br/>ICU Bed Reserved ✓`);
     }
 
-    // Polyline
-    const path = [
-      [ambLat, ambLon],
-      [userLat, userLon]
-    ];
-    if (dispatchData.hospital) {
-      path.push([dispatchData.hospital.latitude, dispatchData.hospital.longitude]);
-    }
-
-    const polyline = L.polyline(path, {
+    const polyline = L.polyline(routeCoords, {
       color: '#ef4444',
       weight: 3,
       opacity: 0.7,
@@ -157,6 +311,42 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
     };
   }, [userLat, userLon, dispatchData]);
 
+  // Adjust map bounds dynamically when trip phase transitions
+  useEffect(() => {
+    if (!mapRef.current) return;
+    if (tripPhase === 'hospital' && dispatchData.hospital) {
+      const bounds = L.latLngBounds([[userLat, userLon], [dispatchData.hospital.latitude, dispatchData.hospital.longitude]]);
+      mapRef.current.fitBounds(bounds, { padding: [40, 40] });
+    } else {
+      const bounds = L.latLngBounds([[userLat, userLon], [ambStartLat, ambStartLon]]);
+      mapRef.current.fitBounds(bounds, { padding: [40, 40] });
+    }
+  }, [tripPhase]);
+
+  // Handle resets and coordinate mapping when transitioning legs
+  useEffect(() => {
+    setArrived(false);
+    setCompletedTriggered(false);
+    setCurrentRouteIndex(0);
+    if (tripPhase === 'hospital') {
+      setAmbLat(userLat);
+      setAmbLon(userLon);
+      setEta(10);
+      setRouteCoords(dispatchData.hospital 
+        ? [[userLat, userLon], [dispatchData.hospital.latitude, dispatchData.hospital.longitude]]
+        : [[userLat, userLon], [userLat, userLon]]
+      );
+    } else {
+      setAmbLat(ambStartLat);
+      setAmbLon(ambStartLon);
+      setEta(dispatchData.etaMins || 8);
+      setRouteCoords(dispatchData.hospital 
+        ? [[ambStartLat, ambStartLon], [userLat, userLon], [dispatchData.hospital.latitude, dispatchData.hospital.longitude]]
+        : [[ambStartLat, ambStartLon], [userLat, userLon]]
+      );
+    }
+  }, [tripPhase]);
+
   // Theme changes are handled via CSS filter wrapper class leaflet-dark-mode
 
   // Update ambulance marker & polyline path reactively on coordinates updates
@@ -165,16 +355,12 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
       const newLatLng = L.latLng(ambLat, ambLon);
       ambMarkerRef.current.setLatLng(newLatLng);
 
-      const nextPath = [
-        newLatLng,
-        [userLat, userLon]
-      ];
-      if (dispatchData.hospital) {
-        nextPath.push([dispatchData.hospital.latitude, dispatchData.hospital.longitude]);
+      const remainingPath = routeCoords.slice(currentRouteIndex);
+      if (remainingPath.length > 0) {
+        polylineRef.current.setLatLngs([newLatLng, ...remainingPath.slice(1)]);
       }
-      polylineRef.current.setLatLngs(nextPath);
     }
-  }, [ambLat, ambLon, userLat, userLon, dispatchData.hospital]);
+  }, [ambLat, ambLon, routeCoords, currentRouteIndex]);
 
   const CHECKLIST = [
     { id: 'gate',  label: 'Unlock the front gate/door for paramedics' },
@@ -220,41 +406,74 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
     }
   }, [chatMessages, isChatOpen]);
 
-  // Movement animation
+  // Movement animation along OSRM road coordinates
   useEffect(() => {
+    if (routeCoords.length === 0) return;
+
+    // Determine target location (User in pickup phase, Hospital in hospital phase)
+    let targetLat = userLat;
+    let targetLon = userLon;
+    if (tripPhase === 'hospital' && dispatchData.hospital) {
+      targetLat = dispatchData.hospital.latitude;
+      targetLon = dispatchData.hospital.longitude;
+    }
+
+    // Find coordinate closest to target location in routeCoords
+    let targetIndex = routeCoords.length - 1;
+    let minDistance = Infinity;
+    for (let i = 0; i < routeCoords.length; i++) {
+      const dist = Math.pow(routeCoords[i][0] - targetLat, 2) + Math.pow(routeCoords[i][1] - targetLon, 2);
+      if (dist < minDistance) {
+        minDistance = dist;
+        targetIndex = i;
+      }
+    }
+
+    const subPath = routeCoords.slice(0, targetIndex + 1);
+
     const TOTAL_DURATION_MS = 30000; // 30 seconds
-    const INTERVAL_MS = 30; // ~33 fps
-    const TOTAL = TOTAL_DURATION_MS / INTERVAL_MS; // 1000 steps
-    let step = 0;
-    const dLat = (userLat - ambStartLat) / TOTAL;
-    const dLon = (userLon - ambStartLon) / TOTAL;
-    const initialEta = dispatchData.etaMins || 8;
-    const decrementStep = Math.max(1, Math.floor(TOTAL / initialEta));
+    const INTERVAL_MS = 50; // 20 fps
+    const TOTAL_STEPS = TOTAL_DURATION_MS / INTERVAL_MS; // 600 steps
+    let currentStep = 0;
+    const initialEta = eta;
+    const decrementStep = Math.max(1, Math.floor(TOTAL_STEPS / initialEta));
 
     const iv = setInterval(() => {
-      if (step >= TOTAL) {
+      if (currentStep >= TOTAL_STEPS) {
         clearInterval(iv);
         setArrived(true);
+        setCurrentRouteIndex(targetIndex);
+        setAmbLat(routeCoords[targetIndex][0]);
+        setAmbLon(routeCoords[targetIndex][1]);
+
+        if (tripPhase === 'hospital') {
+          console.log("[ANIMATION] Ambulance reached hospital. Triggering post-care transition in 3.5s...");
+          setTimeout(() => {
+            console.log("[ANIMATION] Timeout fired. Calling onComplete...");
+            if (onComplete) onComplete();
+          }, 3500);
+        }
         return;
       }
-      setAmbLat(p => p + dLat);
-      setAmbLon(p => p + dLon);
-      if (step % decrementStep === 0) {
+
+      const fraction = currentStep / TOTAL_STEPS;
+      const interpolated = interpolatePath(subPath, fraction);
+
+      if (interpolated) {
+        setAmbLat(interpolated[0]);
+        setAmbLon(interpolated[1]);
+        setCurrentRouteIndex(interpolated[2]);
+      }
+
+      if (currentStep % decrementStep === 0) {
         setEta(p => Math.max(1, p - 1));
       }
-      step++;
-    }, INTERVAL_MS);
-    return () => clearInterval(iv);
-  }, []);
 
-  // When ambulance arrives, after a brief moment trigger post-care
-  useEffect(() => {
-    if (arrived && !completedTriggered) {
-      setCompletedTriggered(true);
-      const t = setTimeout(() => { if (onComplete) onComplete(); }, 3500);
-      return () => clearTimeout(t);
-    }
-  }, [arrived]);
+      currentStep++;
+    }, INTERVAL_MS);
+
+    return () => clearInterval(iv);
+  }, [routeCoords, userLat, userLon, tripPhase, dispatchData.hospital, onComplete]);
 
   // Audio Synthesis Guidelines Reader
   const guidelines = FIRST_AID_GUIDELINES[problem] || FIRST_AID_GUIDELINES['Other / Not Sure'];
@@ -481,7 +700,9 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
                 borderRadius: 99,
                 fontWeight: 700
               }}>
-                {arrived ? 'Arrived / Delivered' : 'Out for Delivery'}
+                {tripPhase === 'pickup' 
+                  ? (arrived ? 'Arrived / Courier at Door' : 'Out for Delivery')
+                  : (arrived ? 'Delivered / Completed' : 'In Transit to Hub')}
               </span>
             </div>
 
@@ -489,7 +710,11 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
               <div style={{ fontSize: '1.5rem' }}>📦</div>
               <div style={{ flex: 1 }}>
                 <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Courier: SwiftDelivery Logistics</p>
-                <p style={{ fontSize: '0.8rem', fontWeight: 600 }}>ETA: {arrived ? 'Delivered' : `${eta} mins`}</p>
+                <p style={{ fontSize: '0.8rem', fontWeight: 600 }}>
+                  {tripPhase === 'pickup'
+                    ? (arrived ? 'Courier at Door' : `ETA: ${eta} mins`)
+                    : (arrived ? 'Delivered' : `Hub ETA: ${eta} mins`)}
+                </p>
               </div>
               <div style={{ textAlign: 'right' }}>
                 <span style={{ fontSize: '0.65rem', color: 'var(--text-faint)' }}>Secure Pin</span>
@@ -497,8 +722,73 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
               </div>
             </div>
 
+            {/* Inconspicuous Courier Pin Verification Widget */}
+            {tripPhase === 'pickup' && (
+              <div style={{ borderTop: '1px solid var(--border)', marginTop: 12, paddingTop: 12 }}>
+                <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: 8 }}>Verify Courier Pin:</p>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    type="text"
+                    maxLength={4}
+                    placeholder="Courier Pin"
+                    value={otpInput}
+                    onChange={e => setOtpInput(e.target.value.replace(/\D/g, ''))}
+                    style={{
+                      flex: 1,
+                      background: 'var(--bg-elevated)',
+                      border: otpError ? '1px solid var(--accent)' : '1px solid var(--border)',
+                      borderRadius: 6,
+                      padding: '6px 10px',
+                      color: 'var(--text)',
+                      fontSize: '0.8rem',
+                      fontFamily: 'monospace',
+                      textAlign: 'center',
+                      outline: 'none'
+                    }}
+                  />
+                  <button
+                    onClick={() => handleVerifyOtp(otpInput)}
+                    disabled={verifyingOtp || otpInput.length < 4}
+                    style={{
+                      background: 'var(--blue)',
+                      border: 'none',
+                      borderRadius: 6,
+                      color: '#fff',
+                      padding: '6px 12px',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      opacity: otpInput.length < 4 ? 0.6 : 1
+                    }}
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    onClick={() => handleVerifyOtp(otp)}
+                    disabled={verifyingOtp}
+                    style={{
+                      background: 'var(--green)',
+                      border: 'none',
+                      borderRadius: 6,
+                      color: '#fff',
+                      padding: '6px 10px',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                    title="Quick Verify"
+                  >
+                    ⚡
+                  </button>
+                </div>
+                {otpError && (
+                  <p style={{ color: 'var(--accent)', fontSize: '0.7rem', marginTop: 4 }}>{otpError}</p>
+                )}
+              </div>
+            )}
+
             {/* Inconspicuous delivery timeline */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 12 }}>
               <span>Courier Badge: <strong style={{ fontFamily: 'monospace' }}>{badge}</strong></span>
               <span>ICU Bed Reserved: <strong style={{ color: 'var(--green)' }}>Yes</strong></span>
             </div>
@@ -776,7 +1066,11 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
         <div className="tracking-top-row">
           <CheckCircle2 size={28} color="var(--green)" />
           <div>
-            <h2>{arrived ? 'Ambulance Arrived!' : 'Driver is on the way'}</h2>
+            <h2>
+              {tripPhase === 'pickup'
+                ? (arrived ? 'Ambulance Arrived!' : 'Driver is on the way')
+                : (arrived ? 'Arrived at Hospital!' : 'Heading to Hospital')}
+            </h2>
             <p>Booking #{dispatchData.bookingId.slice(0, 8).toUpperCase()}</p>
           </div>
           <div className="eta-pill">
@@ -787,13 +1081,23 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
 
         <div className="info-rows">
           {/* OTP Verification Row */}
-          <div className="info-row" style={{ background: 'rgba(239,68,68,0.07)', borderRadius: 10, padding: '10px 12px', border: '1px solid rgba(239,68,68,0.2)' }}>
-            <div>
-              <span className="info-key" style={{ color: 'var(--accent)' }}>🔐 Verify Driver OTP</span>
-              <p style={{ fontSize: '0.7rem', color: 'var(--text-faint)', marginTop: 2 }}>Show this code to your paramedic for identity confirmation</p>
+          {tripPhase === 'pickup' && (
+            <div className="info-row" style={{ background: 'rgba(239,68,68,0.07)', borderRadius: 10, padding: '10px 12px', border: '1px solid rgba(239,68,68,0.2)' }}>
+              <div>
+                <span className="info-key" style={{ color: 'var(--accent)' }}>🔐 Verify Driver OTP</span>
+                <p style={{ fontSize: '0.7rem', color: 'var(--text-faint)', marginTop: 2 }}>Show this code to your paramedic for identity confirmation</p>
+              </div>
+              <span style={{ fontFamily: 'monospace', fontSize: '1.5rem', fontWeight: 900, letterSpacing: 6, color: 'var(--accent)' }}>{otp}</span>
             </div>
-            <span style={{ fontFamily: 'monospace', fontSize: '1.5rem', fontWeight: 900, letterSpacing: 6, color: 'var(--accent)' }}>{otp}</span>
-          </div>
+          )}
+          {dispatchData.pickupAddress && (
+            <div className="info-row" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+              <span className="info-key">📍 Pickup Location</span>
+              <span className="info-val" style={{ fontSize: '0.8rem', textAlign: 'left', lineHeight: 1.4, color: 'var(--text-muted)' }}>
+                {dispatchData.pickupAddress}
+              </span>
+            </div>
+          )}
           <div className="info-row">
             <span className="info-key">🪪 Paramedic Badge</span>
             <span className="info-val" style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--blue)' }}>{badge}</span>
@@ -912,13 +1216,162 @@ export default function TrackingPage({ userLat, userLon, dispatchData, problem, 
           </a>
         </div>
 
-        {arrived ? (
-          <div className="arrived-banner">
-            <CheckCircle2 size={20} color="var(--green)" />
-            <span>Ambulance has arrived! Preparing post-care summary…</span>
+        {/* Interactive OTP Verification or Patient On Board widget */}
+        {tripPhase === 'pickup' ? (
+          <div className="otp-verification-card card animate-in" style={{
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)',
+            padding: '20px',
+            marginTop: '16px',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+              <span style={{ fontSize: '1.2rem' }}>🔐</span>
+              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800 }}>Confirm Identity & Start Trip</h3>
+            </div>
+            
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: '1.4', marginBottom: '16px' }}>
+              Show the 4-digit code to the paramedic or enter it below to confirm your pickup and start the journey to {dispatchData.hospital ? dispatchData.hospital.name : 'the hospital'}.
+            </p>
+
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', background: 'var(--bg-elevated)', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginRight: 'auto' }}>Your OTP Code:</span>
+              <span style={{ fontFamily: 'monospace', fontSize: '1.6rem', fontWeight: 900, letterSpacing: '6px', color: 'var(--accent)' }}>{otp}</span>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                type="text"
+                maxLength={4}
+                placeholder="Enter 4-digit OTP"
+                value={otpInput}
+                onChange={e => setOtpInput(e.target.value.replace(/\D/g, ''))}
+                style={{
+                  flex: 1,
+                  background: 'var(--bg-elevated)',
+                  border: otpError ? '1px solid var(--accent)' : '1px solid var(--border)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '10px 14px',
+                  color: 'var(--text)',
+                  fontSize: '0.95rem',
+                  fontFamily: 'monospace',
+                  textAlign: 'center',
+                  letterSpacing: '2px',
+                  outline: 'none'
+                }}
+              />
+              <button
+                onClick={() => handleVerifyOtp(otpInput)}
+                disabled={verifyingOtp || otpInput.length < 4}
+                className="btn btn-primary"
+                style={{
+                  padding: '10px 20px',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  opacity: otpInput.length < 4 ? 0.6 : 1,
+                  cursor: otpInput.length < 4 ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {verifyingOtp ? 'Verifying...' : 'Verify'}
+              </button>
+            </div>
+
+            {otpError && (
+              <p style={{ color: 'var(--accent)', fontSize: '0.75rem', marginTop: '8px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <AlertCircle size={14} /> {otpError}
+              </p>
+            )}
+
+            <div style={{ position: 'relative', margin: '20px 0 16px', textAlign: 'center' }}>
+              <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: '1px', background: 'var(--border)', zIndex: 1 }} />
+              <span style={{ position: 'relative', background: 'var(--bg-card)', padding: '0 12px', fontSize: '0.7rem', color: 'var(--text-faint)', zIndex: 2, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Demo Simulator</span>
+            </div>
+
+            <button
+              onClick={() => handleVerifyOtp(otp)}
+              disabled={verifyingOtp}
+              style={{
+                width: '100%',
+                background: 'linear-gradient(135deg, var(--green) 0%, #059669 100%)',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: 'var(--radius-sm)',
+                padding: '12px',
+                fontSize: '0.85rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                transition: 'transform 0.2s',
+                boxShadow: '0 4px 12px rgba(16, 185, 129, 0.2)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px'
+              }}
+              onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-1px)'}
+              onMouseLeave={e => e.currentTarget.style.transform = 'translateY(0)'}
+            >
+              🚀 Verify OTP & Start Trip (Driver Simulation)
+            </button>
           </div>
         ) : (
-          <button className="btn btn-full btn-danger" style={{ marginTop: 8 }} onClick={onReset}>Cancel Emergency Request</button>
+          <div className="patient-transport-card card animate-in" style={{
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)',
+            padding: '20px',
+            marginTop: '16px',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+            borderLeft: '4px solid var(--green)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+              <span style={{ fontSize: '1.2rem' }}>🚑</span>
+              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--green)' }}>Patient On Board</h3>
+            </div>
+            
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>
+              OTP successfully verified. The ambulance has departed with the patient and is heading to <strong>{dispatchData.hospital ? dispatchData.hospital.name : 'the hospital'}</strong>.
+            </p>
+
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '16px', background: 'rgba(16,185,129,0.08)', borderRadius: '8px', padding: '12px', border: '1px solid rgba(16,185,129,0.15)' }}>
+              <div style={{ fontSize: '1.5rem' }}>🏥</div>
+              <div style={{ flex: 1 }}>
+                <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', margin: 0 }}>Destination Care Facility</p>
+                <p style={{ fontSize: '0.85rem', fontWeight: 700, margin: '2px 0 0' }}>{dispatchData.hospital ? dispatchData.hospital.name : 'Emergency Center'}</p>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <span style={{
+                  fontSize: '0.7rem',
+                  background: 'var(--green-glow)',
+                  color: 'var(--green)',
+                  padding: '3px 8px',
+                  borderRadius: 99,
+                  fontWeight: 700,
+                  display: 'inline-block'
+                }}>
+                  ICU Bed Secured ✓
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {arrived ? (
+          <div className="arrived-banner" style={{
+            background: tripPhase === 'hospital' ? 'rgba(16, 185, 129, 0.08)' : 'rgba(59, 130, 246, 0.08)',
+            border: tripPhase === 'hospital' ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid rgba(59, 130, 246, 0.2)',
+            marginTop: '16px'
+          }}>
+            <CheckCircle2 size={20} color={tripPhase === 'hospital' ? "var(--green)" : "var(--blue)"} />
+            <span>
+              {tripPhase === 'hospital'
+                ? 'Ambulance has arrived at the hospital! Preparing post-care summary…'
+                : 'Ambulance has arrived! Please verify the OTP above to start the transit.'}
+            </span>
+          </div>
+        ) : (
+          <button className="btn btn-full btn-danger" style={{ marginTop: 16 }} onClick={onReset}>Cancel Emergency Request</button>
         )}
       </div>
 

@@ -12,6 +12,66 @@ export default function HomePage({ phone, setPhone, onNext, stats }) {
   const [countdown, setCountdown] = useState(null);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [voiceError, setVoiceError] = useState(null);
+  const [nearestAmbulance, setNearestAmbulance] = useState(null);
+  const [loadingNearest, setLoadingNearest] = useState(true);
+
+  useEffect(() => {
+    const locateAndFindNearest = async () => {
+      try {
+        let lat = 28.6139, lon = 77.2090; // Default Delhi NCR fallback
+        try {
+          const r = await fetch('https://ipapi.co/json/');
+          if (r.ok) {
+            const d = await r.json();
+            if (d.latitude && d.longitude) {
+              lat = d.latitude;
+              lon = d.longitude;
+            }
+          }
+        } catch (e) {
+          console.error("IP locate failed on home:", e);
+        }
+
+        const response = await fetch(`${API_BASE_URL}/ambulances?lat=${lat}&lon=${lon}`);
+        if (response.ok) {
+          const ambulances = await response.json();
+          const available = ambulances.filter(a => a.isAvailable);
+          if (available.length > 0) {
+            const haversineDist = (lat1, lon1, lat2, lon2) => {
+              const toRad = deg => deg * Math.PI / 180;
+              const R = 6371;
+              const dLat = toRad(lat2 - lat1);
+              const dLon = toRad(lon2 - lon1);
+              const a = Math.sin(dLat / 2) ** 2 +
+                        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+                        Math.sin(dLon / 2) ** 2;
+              return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            };
+
+            const sorted = available.map(a => ({
+              ...a,
+              distance: haversineDist(lat, lon, a.latitude, a.longitude)
+            })).sort((a, b) => a.distance - b.distance);
+
+            const closest = sorted[0];
+            const etaMins = Math.max(1, Math.ceil(closest.distance * 3 + 2));
+            setNearestAmbulance({
+              providerName: closest.providerName,
+              driverName: closest.driverName,
+              distanceKm: parseFloat(closest.distance.toFixed(1)),
+              etaMins
+            });
+          }
+        }
+      } catch (err) {
+        console.error("Failed to find nearest ambulance on home mount:", err);
+      } finally {
+        setLoadingNearest(false);
+      }
+    };
+
+    locateAndFindNearest();
+  }, []);
   const [selectedLang, setSelectedLang] = useState(() => {
     const navLang = navigator.language;
     if (navLang && navLang.toLowerCase().startsWith('en')) {
@@ -422,6 +482,50 @@ export default function HomePage({ phone, setPhone, onNext, stats }) {
             onChange={e => setPhone(e.target.value)}
             autoComplete="tel"
           />
+        </div>
+      </div>
+
+      {/* Nearest Live Responder Card */}
+      <style>{`
+        @keyframes livePulse {
+          0% { transform: scale(0.9); opacity: 0.6; }
+          50% { transform: scale(1.2); opacity: 1; }
+          100% { transform: scale(0.9); opacity: 0.6; }
+        }
+      `}</style>
+      <div style={{ padding: '0 20px', marginBottom: 20 }}>
+        <div className="card" style={{
+          background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(59, 130, 246, 0.08) 100%)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)',
+          padding: '14px 18px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+          backdropFilter: 'blur(8px)'
+        }}>
+          <div style={{
+            width: 10,
+            height: 10,
+            borderRadius: '50%',
+            background: 'var(--green)',
+            boxShadow: '0 0 10px var(--green)',
+            animation: 'livePulse 2s infinite ease-in-out',
+            flexShrink: 0
+          }} />
+          <div style={{ flex: 1, textAlign: 'left' }}>
+            <span style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--text-faint)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block' }}>Nearest Live Responder</span>
+            {loadingNearest ? (
+              <p style={{ fontSize: '0.82rem', margin: '2px 0 0', color: 'var(--text-muted)' }}>Locating closest emergency unit...</p>
+            ) : nearestAmbulance ? (
+              <p style={{ fontSize: '0.85rem', fontWeight: 700, margin: '2px 0 0', color: 'var(--text)', lineHeight: 1.35 }}>
+                🚨 <strong style={{ color: 'var(--text)' }}>{nearestAmbulance.providerName}</strong> is <span style={{ color: 'var(--accent)' }}>{nearestAmbulance.distanceKm} km</span> away • <span style={{ color: 'var(--green)' }}>{nearestAmbulance.etaMins} mins ETA</span>
+              </p>
+            ) : (
+              <p style={{ fontSize: '0.82rem', margin: '2px 0 0', color: 'var(--text-muted)' }}>Emergency units on standby nearby</p>
+            )}
+          </div>
         </div>
       </div>
 

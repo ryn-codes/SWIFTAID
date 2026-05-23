@@ -80,6 +80,7 @@ const getHistory = async (req, res) => {
         createdAt: r.createdAt,
         status: r.status,
         emergencyType: r.emergencyType,
+        pickupAddress: r.pickupAddress,
         driverName: accepted?.ambulance?.driver?.name || 'Unassigned',
         driverPhone: accepted?.ambulance?.driver?.phoneNumber || '',
         providerName: accepted?.ambulance?.provider?.name || '—',
